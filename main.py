@@ -11,7 +11,7 @@ import numpy as np
 from functions import *
 
 
-N = 10*3 # Typically 10**4 in the paper but relatively long to run, change it for final computation
+N = 10**3 # Typically 10**4 in the paper but relatively long to run, change it for final computation
 population = simulate_population(N) # Simulate the population 
 n = 473 # To match the size of the sample described in the paper
 
