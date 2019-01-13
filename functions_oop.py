@@ -10,6 +10,7 @@ from numpy.random import multinomial
 from scipy.stats import truncnorm, gamma, uniform
 from particles import resampling as rs
 import copy
+from numba import jit, prange
 
 
 class SMC_ABC(object):
@@ -27,6 +28,7 @@ class SMC_ABC(object):
         self.T = T
         self.alpha = alpha
 
+    @jit(parallel=True)
     def generate_sample_from_clusters(self, clusters_sizes, nb_of_clusters_of_that_size): # need to shuffle ?
         '''Generates a sample from the types in the population and the number of people that are of that type 
         clusters_sizes: (array-like)  How many people in each cluster (a cluster = people with the same type)
@@ -36,7 +38,7 @@ class SMC_ABC(object):
         sample = [] # Store the samples generated
         
         for cluster_size, nb_clusters in zip(clusters_sizes,nb_of_clusters_of_that_size):
-            for i in range(current_group_index, current_group_index+nb_clusters):
+            for i in prange(current_group_index, current_group_index+nb_clusters):
                 sample+= np.full(shape=(cluster_size,),fill_value=i).tolist()
             current_group_index+=nb_clusters
         return np.array(sample)
@@ -67,8 +69,18 @@ class SMC_ABC(object):
         theta = np.dstack((phi,tau,xi))[0]
         return theta
     
+    @jit(parallel=True)
+    def samples_and_etas_from_pop(self, priors):
+        samples = []
+        etas = []
+        for theta in priors:
+            pop = self.simulate_population(theta, True)
+            samples.append(np.random.choice(pop, self.sample_size, replace=False))
+            etas.append(self.compute_eta(pop))
+            
+        return samples, etas
     
-    
+    @jit
     def simulate_population(self, theta, verbose=True):
         ''' Simulate the population as presented in the paper 
         N: (int) size of the particle to simulate
@@ -76,9 +88,10 @@ class SMC_ABC(object):
         verbose: if True then the algorithm prints intermediate results
         
         returns: (array-like) particle of size n, the values in the array are the type of each individual belonging in the population '''    
-    
-        X,G = np.ones(1),1 
-        
+
+        X = np.ones(1, 'int')
+        G = 1 
+
         fails = 0
         t=1 
         
@@ -129,6 +142,7 @@ class SMC_ABC(object):
         new_weights = new_weights/new_weights.sum() if new_weights.sum()!=0 else new_weights# Renomalise the weights 
         return new_weights
     
+    #@jit(parallel=True)
     def find_epsilon_n(self, prev_epsilon, prev_weights, gen_sample_etas, prev_ess):
         ''' Returns the next epsilon such that ESS(new_epsilon) is the closest to ESS(prev_epsilon)
         '''
@@ -168,59 +182,67 @@ class SMC_ABC(object):
         
         new_theta_accepted = unif_draws<=acceptance_probas
         final_theta = np.where(new_theta_accepted,new_theta, theta)
-        final_pop = self.simulate_population(final_theta, False)
-        final_sample = np.random.choice(final_pop, self.sample_size, replace=True)
+
+        return final_theta, acceptance_probas # Check if final_theta<1 for all theta
     
-        return final_theta, final_sample, acceptance_probas # Check if final_theta<1 for all theta
-    
-    
+    @jit
     def sampler(self, full_output=False):
         
         epsilon = []
         ess = [] 
-        weights = {'n-1':0,'n':0}
+        weights = []
         thetas = []
         X = [] # Each element of this array is the N samples at time n
         acceptance_probas = []
+        samples = []
+        etas = []
         
         # Step 0 
         n=0        
         epsilon.append(10**6) # Set epsilonO to a big number
         ess.append(self.N) # Append ESSo
-        weights['n-1'] = np.full(self.N,1/self.N) # Append Wo
+        weights.append(np.full(self.N,1/self.N)) # Append Wo
         thetas.append(self.priors)
-        pops = np.array([self.simulate_population(theta, True) for theta in thetas[n-1]])
+        
+        samples, etas = self.samples_and_etas_from_pop(thetas[0])
 
-        X.append(np.array([np.random.choice(pop, self.sample_size, replace=False) for pop in pops])) # Draw a sample without replacement
-        etas = np.array([self.compute_eta(pop) for pop in X[0]])
+        X.append(samples)
+
         
         # Step 1
         while (n<self.T) and (epsilon[n-1]>= self.e):
             n+=1
             print(n)
 
-            epsilon.append(self.find_epsilon_n(epsilon[n-1], weights['n-1'], etas, ess[n-1])) # Solve ESS = alpha*ESS
-            weights['n'] = self.compute_Wn(weights['n-1'],epsilon[n-1],epsilon[n], etas)
-            ess.append(self.compute_ess(weights['n']))
+            epsilon.append(self.find_epsilon_n(epsilon[n-1], weights[n-1], etas, ess[n-1])) # Solve ESS = alpha*ESS
+            weights.append(self.compute_Wn(weights[n-1],epsilon[n-1],epsilon[n], etas))
+            ess.append(self.compute_ess(weights[n]))
             
             # Step 2
             if ess[n]<self.N_T:
                 print('resampling')
-                indices = rs.systematic(weights['n'])
+                indices = rs.systematic(weights[n])
                 thetas[n-1] = copy.deepcopy(thetas[n-1][indices])
                 X[n-1] = copy.deepcopy(X[n-1][indices])
-                weights['n'] = np.full(self.N,1/self.N)
+                weights[n] = np.full(self.N,1/self.N)
                     
             # Step 3
-            cov_theta = np.cov(np.array(thetas[n-1]), rowvar=False)
             print('Kernel update')
-            new_Z = np.array([self.indiv_MHRW(thetas[n-1][i], cov_theta, epsilon[n-1], X[n-1][i], etas[i]) for i in range(self.N) if weights['n'][i]>0])
-            thetas.append(copy.deepcopy(np.stack(new_Z[:,0], axis=0))) 
-            X.append(copy.deepcopy(np.stack(new_Z[:,1], axis=0)))
-            acceptance_probas.append(copy.deepcopy(np.stack(new_Z[:,2], axis=0)))
-            # Prepare the weights to store the next iteration (better in head of the loop ?) 
-            weights['n-1'] = weights['n']
-    
+            cov_theta = np.cov(np.array(thetas[n-1]), rowvar=False)            
+            thetas_from_MHRW = []
+            ac_proba_from_MHRW = []
+            for i in prange(self.N):
+                if weights[n][i]>0:
+                    MHRW_results = self.indiv_MHRW(thetas[n-1][i], cov_theta, epsilon[n-1], X[n-1][i], etas[i])
+                    thetas_from_MHRW.append(np.stack(MHRW_results[0]))
+                    ac_proba_from_MHRW.append(MHRW_results[1])
+            
+            samples, etas = self.samples_and_etas_from_pop(thetas_from_MHRW)
+                        
+            thetas.append(copy.deepcopy(np.stack(np.array(thetas_from_MHRW))))
+            X.append(copy.deepcopy(np.stack(np.array(samples))))
+            acceptance_probas.append(copy.deepcopy(np.stack(np.array(ac_proba_from_MHRW))))
+            etas = np.array(etas)
 
         if full_output: 
             self.output = np.stack(thetas)[1:], np.stack(acceptance_probas), ess, epsilon
@@ -229,3 +251,4 @@ class SMC_ABC(object):
         else:
             self.output = np.stack(thetas)[1:]
             return np.stack(thetas)[1:] # [1:] to not return the prior draw of n=0
+
