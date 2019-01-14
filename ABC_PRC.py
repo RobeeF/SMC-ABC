@@ -2,7 +2,7 @@ import numpy as np
 import scipy.stats as sc
 import seaborn as sns
 import matplotlib.pyplot as plt
-
+import math
 
 
 def ABC_PRC (D, x0, f, prior, nu, epsilon_list, E, K_list, L_list, eta, rho, N, verbose = False) :
@@ -47,6 +47,8 @@ def ABC_PRC (D, x0, f, prior, nu, epsilon_list, E, K_list, L_list, eta, rho, N, 
     
     if verbose :
         Number_gen = np.zeros(T)
+        ess_list = []
+        count = 0
     
     while True :
         while True :
@@ -71,6 +73,15 @@ def ABC_PRC (D, x0, f, prior, nu, epsilon_list, E, K_list, L_list, eta, rho, N, 
                     print(theta2)
                     Number_gen[t] = Number_gen[t] + 1
                     print(Number_gen[t])
+                    
+                    if count == 10 :
+                        ess = np.sum(np.array(list(map(lambda x : x**2, weight[:,t]/np.sum(weight[:,t])))))
+                        ess = 1/ess
+                        ess_list.append(ess)
+                        count = 0
+                        
+                    else :
+                        count = count + 1
                     
                 
                 if rho(eta(x), eta(x0)) < epsilon_list[t] :
@@ -100,7 +111,7 @@ def ABC_PRC (D, x0, f, prior, nu, epsilon_list, E, K_list, L_list, eta, rho, N, 
         #PRC3
         weight[:,t] = weight[:,t]/np.sum(weight[:,t])
         
-        ess = np.sum(np.array(list(map(lambda x : x**2, weight))))
+        ess = np.sum(np.array(list(map(lambda x : x**2, weight[:,t]))))
         ess = 1/ess
         
         if ess < E :
@@ -115,7 +126,7 @@ def ABC_PRC (D, x0, f, prior, nu, epsilon_list, E, K_list, L_list, eta, rho, N, 
             break
     
     if verbose :
-        return(theta, Number_gen)
+        return(theta, Number_gen, ess_list)
     
     return(theta)
 
@@ -123,6 +134,8 @@ def ABC_PRC (D, x0, f, prior, nu, epsilon_list, E, K_list, L_list, eta, rho, N, 
 
 
 ### Toy example ###
+    
+##Define the arguments
     
 N = 1000
 B = 100
@@ -164,9 +177,13 @@ def rho(eta1, eta2) :
     
     return (abs(np.mean(eta1)))
 
-theta, Number_gen = ABC_PRC(1, x0, f, prior, nu, epsilon_list, E, K_list, L_list, eta, rho, N, verbose = True)
+
+## Launch the simlation
+
+theta, Number_gen, ess_list = ABC_PRC(1, x0, f, prior, nu, epsilon_list, E, K_list, L_list, eta, rho, N, verbose = True)
 
 
+## Get some graphes
 
 line = np.arange(-4, 4, 0.01)
 
@@ -191,12 +208,13 @@ print(Number_gen[0])
 print(Number_gen[1])
 print(Number_gen[2])
 
-
+plt.plot(ess_list)
 
 
 ### Tuberculosis Example ###
 
-
+##Define the arguments
+   
 def generate_sample_from_clusters(clusters_sizes,nb_of_clusters_of_that_size): # need to shuffle ?
     '''Generates a sample from the types in the population and the number of people that are of that type 
     clusters_sizes: (array-like)  How many people in each cluster (a cluster = people with the same type)
@@ -213,66 +231,59 @@ def generate_sample_from_clusters(clusters_sizes,nb_of_clusters_of_that_size): #
     return np.array(sample)
 
   
-def simulate_population(N, phi, tau, xi, verbose=True):
+def simulate_population(pop_size, theta, verbose=True):
     ''' Simulate the population as presented in the paper 
     N: (int) number of people in the population to simulate
     verbose: if True then the algorithm prints intermediate results
     
-    returns: (array-like) sample of size N, the values in the array are the type of each individual belonging in the population '''    
-    event_proba = np.array([phi, tau, xi])
-    X,G = np.ones(1),1 
-    
-    if (event_proba < 0).any() :
+    returns: (array-like) sample of size N, the values in the array are the type of each individual belonging in the population '''
+    if (theta < 0).any() :
         return generate_sample_from_clusters(np.array([1]),np.array([N]))
 
-    fails = 0
-    t=1 
-    
-    while X.sum()<N: 
-        if X.sum()>0:  
-            t+=1
-            event_picked = np.random.multinomial(n=1, pvals=event_proba/event_proba.sum())
-            type_picked = np.random.multinomial(n=1, pvals=X/X.sum()) # Pas bon besoin d'une conversion
-            type_picked_index = np.where(type_picked==1)[0][0]
-            
-            if (event_picked == np.array([1,0,0])).all():
-                X[type_picked_index] += 1 
-                        
-            elif (event_picked == np.array([0,1,0])).all(): # Death
-                X[type_picked_index] -= 1 
-        
-            else: # Mutation
-                X[type_picked_index] -= 1 
-                X =np.append(X, 1)
-                G+=1
+    X = np.ones(1, 'int')
+    G = 1 
 
-            if verbose:
-                print(X.sum())
-        else: # If all types have died we relaunch the algorithm (as prescribed in Tanaka (2006) p4)
-            t= 1
-            X,G = np.ones(1),1
-            fails+=1
-            if verbose:
-                print('The generation of the population has failed ', fails,' times')
-            
-            #If it fails too much, stop the generation
-            if fails > 5 :
-                return generate_sample_from_clusters(np.array([1]),np.array([N]))
-            
-    # Turn X into a sample of pop = X$
-    Gi, Ni = np.unique(X, return_counts=True) # Count size of each group and how many groups have this size 
-    if Gi[0]==0: # We don't care about the types that have 0 people
-        Gi,Ni = Gi[1:], Ni[1:]
+    t=1
+    fail_to_gen_pop = False
     
-    return generate_sample_from_clusters(Ni.astype(int),Gi.astype(int))
+    while X.sum() < pop_size: 
+        if verbose:
+            print(X.sum())
+        t+=1
+        event_picked = np.random.multinomial(n=1, pvals=theta/theta.sum())
+        type_picked = np.random.multinomial(n=1, pvals=X/X.sum()) # Pas propre besoin d'une conversion
+        type_picked_index = np.where(type_picked==1)[0][0]
+        
+        if (event_picked == np.array([1,0,0])).all():
+            X[type_picked_index] += 1 
+                    
+        elif (event_picked == np.array([0,1,0])).all(): # Death
+            X[type_picked_index] -= 1 
+    
+        else: # Mutation
+            X[type_picked_index] -= 1 
+            X =np.append(X, 1)
+            G+=1
+            
+        if X.sum()==0 or t>=7*pop_size:
+            fail_to_gen_pop=True
+            break
+        
+    if fail_to_gen_pop:
+        return generate_sample_from_clusters(np.array([1]),np.array([N]))
+    else:
+        # Turn X into a sample of pop = X$
+        Gi, Ni = np.unique(X, return_counts=True) # Count size of each group and how many groups have this size 
+        if Gi[0]==0: # We don't care about the types that have 0 people
+            Gi,Ni = Gi[1:], Ni[1:]
+        return generate_sample_from_clusters(Ni.astype(int),Gi.astype(int))
 
 
 N = 1000
 B = 473
 
-def f (N, parameter) :
-    alpha, delta, theta = parameter[0], parameter[1], parameter[2]
-    return (simulate_population(N, alpha, delta, theta, verbose = False))
+def f (N, theta, pop_size = 473) :
+    return simulate_population(pop_size, theta, verbose = False)
 
 actual_data = np.array([30,23,15,10,8,5,4,3,2,1]), np.array([1,1,1,1,1,2,4,13,20,282]) # Data described in the paper end of p8
 x0 = generate_sample_from_clusters(actual_data[0],actual_data[1])
@@ -281,16 +292,16 @@ def prior (parameter = None) :
     
     if parameter is None  :
     
-        alpha = np.random.gamma(1, 0.1)
-        delta = np.random.uniform(0, alpha)
-        theta = sc.truncnorm.rvs(a=0, b=10*15, loc=0.198, scale=0.067352)
+        phi = np.random.gamma(0.1, 1)
+        tau = np.random.uniform(0, phi)
+        xi = sc.truncnorm.rvs(a=0, b=10*10, loc=0.198, scale=0.067352)
         
-        return(np.array([alpha, delta, theta]))
+        return(np.array([phi, tau, xi]))
         
-    alpha, delta, theta = parameter[0], parameter[1], parameter[2]
+    phi, tau, xi = parameter[0], parameter[1], parameter[2]
         
-    if 0 < delta and delta < alpha  :
-        return (sc.norm(0.198, 0.06735**2).pdf(theta))
+    if 0 < tau and tau < phi  :
+        return (sc.norm(0.198, 0.06735**2).pdf(xi))
     
     return (0)
     
@@ -344,4 +355,49 @@ def rho(eta1, eta2) :
     return(compute_rho(eta1, eta2, n = B))
 
 
-theta, Number_gen = ABC_PRC(3, x0, f, prior, nu, epsilon_list, E, K_list, L_list, eta, rho, N, verbose = True)
+## Launch the simlation
+
+theta, Number_gen, ess_list = ABC_PRC(3, x0, f, prior, nu, epsilon_list, E, K_list, L_list, eta, rho, N, verbose = True)
+
+
+
+## Get some graphes
+
+
+sns.kdeplot(theta[:,9,0] - theta[:,9,1])
+
+sns.kdeplot(math.log(2)/(theta[:,9,0] - theta[:,9,1]))
+
+sns.jointplot(theta[:,9,0] - theta[:,9,1], theta[:,9,2], kind="kde")
+
+sns.jointplot(theta[:,9,0], theta[:,9,1], kind="kde")
+
+
+for i in range(10) :
+    print(Number_gen[i])
+
+print(sum(Number_gen))
+
+
+plt.plot(ess_list)
+
+
+theta0 = theta
+
+theta = np.concatenate((theta0, theta000), axis=0)
+
+
+N = 50
+
+theta_list = []
+
+for i in range(20) :
+    theta, Number_gen, ess_list = ABC_PRC(3, x0, f, prior, nu, epsilon_list, E, K_list, L_list, eta, rho, N, verbose = True)
+    theta_list.append(theta)
+
+
+sns.kdeplot(mean(theta_list[:,9,0]))
+
+sns.kdeplot(mean(theta_list[:,9,1]))
+
+sns.kdeplot(mean(theta_list[:,9,2]))
