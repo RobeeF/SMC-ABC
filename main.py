@@ -5,26 +5,43 @@ Created on Sat Dec 29 13:26:04 2018
 @author: robin
 """
 import os
+import pandas as pd
 os.chdir('C:/Users/robin/Documents/GitHub/SMC-ABC') # Change path to run it on your computer
+
+from functions_oop import *
  
 import numpy as np
-from functions import *
+#from functions import *
 
+N = 100
+alpha = 0.9
+e = 0.0045
+pop_size=10000
+T=30
 
-N = 10*3 # Typically 10**4 in the paper but relatively long to run, change it for final computation
-population = simulate_population(N) # Simulate the population 
-n = 473 # To match the size of the sample described in the paper
-
-# Compute eta on a sample from the simulated population
-sample = np.random.choice(population, n, replace=False) # Draw a sample without replacement
-eta_pop_sample = compute_eta(sample)
-print(eta_pop_sample)
-
-# Compute eta from the actual data
 actual_data = np.array([30,23,15,10,8,5,4,3,2,1]), np.array([1,1,1,1,1,2,4,13,20,282]) # Data described in the paper end of p8
-actual_sample = generate_sample_from_clusters(actual_data[0],actual_data[1])
-eta_actual_data = compute_eta(actual_sample)
-print(eta_actual_data)
+smc_abc = SMC_ABC(actual_data, N, e, pop_size, T, alpha)
+smc_abc.sampler(True)
 
-# Compute the difference between the 2
-compute_rho(eta_pop_sample,eta_actual_data,n)
+output = smc_abc.output
+
+thetas = np.concatenate(np.array(output[0]))
+phi = thetas[:,0]
+tau =  thetas[:,1]
+xi =  thetas[:,2]
+
+pd.Series(phi).plot(kind='density')
+pd.Series(tau).plot(kind='density')
+pd.Series(xi).plot(kind='density')
+
+
+ess = output[1]
+pd.Series(ess).plot()
+
+epsilon = output[2]
+pd.Series(epsilon).plot() 
+
+w = np.ones(4)
+a = np.full(10,0)
+np.concatenate(w,a, axis=1)
+
