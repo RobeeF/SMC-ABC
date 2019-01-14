@@ -13,14 +13,13 @@ from functions_oop import *
 import numpy as np
 #from functions import *
 
-N = 100
+N = 50
 alpha = 0.9
-e = 0.0045
+e = 0.01
 pop_size=10000
-T=30
 
 actual_data = np.array([30,23,15,10,8,5,4,3,2,1]), np.array([1,1,1,1,1,2,4,13,20,282]) # Data described in the paper end of p8
-smc_abc = SMC_ABC(actual_data, N, e, pop_size, T, alpha)
+smc_abc = SMC_ABC(actual_data, N, e, pop_size, alpha)
 smc_abc.sampler(True)
 
 output = smc_abc.output

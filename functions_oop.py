@@ -14,7 +14,7 @@ from numba import jit, prange
 
 
 class SMC_ABC(object):
-    def __init__(self, data, N, e, pop_size, T, alpha):
+    def __init__(self, data, N, e, pop_size, alpha):
         if N<2:
             raise ValueError('SMC_ABC sampler works wth at least 2 particules') # Right error type ?
         self.data = self.generate_sample_from_clusters(data[0], data[1])
@@ -24,7 +24,6 @@ class SMC_ABC(object):
         self.pop_size = pop_size
         self.sample_size = len(self.data)
         self.N_T = N/2
-        self.T = T
         self.alpha = alpha
 
     @jit(parallel=True)
@@ -92,7 +91,6 @@ class SMC_ABC(object):
         verbose: if True then the algorithm prints intermediate results
         
         returns: (array-like) particle of size n, the values in the array are the type of each individual belonging in the population '''    
-
         X = np.ones(1, 'int')
         G = 1 
 
@@ -117,8 +115,8 @@ class SMC_ABC(object):
                 X[type_picked_index] -= 1 
                 X =np.append(X, 1)
                 G+=1
-                
-            if X.sum()==0 or t>=7*self.pop_size:
+             
+            if X.sum()==0 or (t>=0.025*self.pop_size and X.sum()/t<0.05) or t>4*self.pop_size:
                 fail_to_gen_pop=True
                 break
             
@@ -148,13 +146,12 @@ class SMC_ABC(object):
         new_weights = new_weights/new_weights.sum() if new_weights.sum()!=0 else new_weights# Renomalise the weights 
         return new_weights
     
-    #@jit(parallel=True)
     def find_epsilon_n(self, prev_epsilon, prev_weights, gen_sample_etas, prev_ess):
         ''' Returns the next epsilon such that ESS(new_epsilon) is the closest to ESS(prev_epsilon)
         '''
         
         SIZE_GRID_EPSILON = 10
-        new_epsilons = np.linspace(self.e,prev_epsilon,5 + np.ceil(SIZE_GRID_EPSILON/prev_epsilon))
+        new_epsilons = np.linspace(self.e,prev_epsilon, 25 + np.ceil(SIZE_GRID_EPSILON/prev_epsilon))
         new_epsilon_ess_dict = {}
         for epsilon in new_epsilons:
             new_weights = self.compute_Wn(prev_weights, prev_epsilon, epsilon, gen_sample_etas)
@@ -211,7 +208,7 @@ class SMC_ABC(object):
             
             # Step 0 
             n=0        
-            epsilon.append(10**6) # Set epsilonO to a big number
+            epsilon.append(500) # Set epsilonO to a quite big number
             ess.append(self.N) # Append ESSo
             
             priors = self.compute_prior()
@@ -225,16 +222,21 @@ class SMC_ABC(object):
 
         
         # Step 1
-        while (n<self.T) and (epsilon[n-1]>= self.e):
+        while epsilon[n-1]>= self.e:
             n+=1
             print(n)
+            if n>10:
+                break
             
             epsilon.append(self.find_epsilon_n(epsilon[n-1], weights[n-1], etas[n-1], ess[n-1])) # Solve ESS = alpha*ESS
             weights.append(self.compute_Wn(weights[n-1],epsilon[n-1],epsilon[n], etas[n-1]))
             ess.append(self.compute_ess(weights[n]))
+            print('Nb of alive particles', np.count_nonzero(weights[n]))
+            print('ESS is ', ess[n])
+            print('epsilon', epsilon[n])
             
             # Step 2
-            if ess[n]<self.N_T:
+            if np.ceil(ess[n])<self.N_T:
                 print('resampling')
                 indices = rs.systematic(W=weights[n],M=self.N)
                 thetas[n-1] = copy.deepcopy(thetas[n-1][indices])
@@ -252,7 +254,7 @@ class SMC_ABC(object):
                     
             samples, etas_samples, priors_that_generated_pop = self.samples_and_etas_from_pop(thetas_from_MHRW)
             weights[n] = np.full(len(samples),1/len(samples)) # Some particules have died since resampling/step 1
-            
+            print('step 3 weights ', weights[n])
             thetas.append(copy.deepcopy(np.stack(np.array(priors_that_generated_pop))))
             X.append(copy.deepcopy(np.stack(np.array(samples))))
             etas.append(copy.deepcopy(np.stack(np.array(etas_samples))))
